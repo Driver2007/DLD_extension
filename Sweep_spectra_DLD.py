@@ -77,7 +77,7 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
     def delete_device(self):
         self.debug_stream("In delete_device()")
         #----- PROTECTED REGION ID(Sweep_spectra_DLD.delete_device) ENABLED START -----#
-        
+        del self.stack
         #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.delete_device
 
     def init_device(self):
@@ -90,21 +90,26 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
         self.attr_measurements_error_read = ""
         self.attr_Server_Save_File_Busy_read = False
         self.attr_Progress_read = 0.0
-        self.attr_sp_y_read = [0.0]
+        self.attr_Check_stack_Saved_read = False
+        self.attr_Check_spectrum_Saved_read = False
+        self.attr_Check_stack_NotSaved_read = False
+        self.attr_Check_spectrum_NotSaved_read = False
+        self.attr_sp_y_read = [0]
         self.attr_sp_x_read = [0.0]
         #----- PROTECTED REGION ID(Sweep_spectra_DLD.init_device) ENABLED START -----#
         self.sample=PyTango.DeviceProxy("set/sample/voltage")
-        self.tdc=PyTango.DeviceProxy("ktof/tdc/tdc1")        
+        self.tdc=PyTango.DeviceProxy("ktof/tdc/tdc1")      
         self.Save_Filecounter=0
         self.Save_Directory=""
         self.Save_Filename=""         
         self.steps=0
         self.resize_spectrum_trig=False
-        self.CmdTrig_sweep_Start=False
+        self.CmdTrig_measure_Start=False
         self.change_scale_trig=False
-        self.CmdTrig_stack_Start=False
+        self.CmdTrig_stack_save=False
+        self.CmdTrig_spectrum_save=False
         self.attr_measurements_error_read="No error"
-        self.stack=np.array([[[0.0]]])
+        self.stack=np.array([[[0]]])
         if not 'scale_thread' in dir(self):
             self.scale_thread = threading.Thread(target=self.change_scale)
             self.scale_thread.setDaemon(True)
@@ -113,6 +118,10 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
             self.spectrum_thread = threading.Thread(target=self.measure)
             self.spectrum_thread.setDaemon(True)
             self.spectrum_thread.start()
+        if not 'save_thread' in dir(self):
+            self.save_thread = threading.Thread(target=self.save)
+            self.save_thread.setDaemon(True)
+            self.save_thread.start()
         #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.init_device
 
     def always_executed_hook(self):
@@ -217,7 +226,7 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
         self.debug_stream("In write_CmdTrig_Save_spectrum()")
         data = attr.get_write_value()
         #----- PROTECTED REGION ID(Sweep_spectra_DLD.CmdTrig_Save_spectrum_write) ENABLED START -----#
-        self.SaveSpectrum()
+        self.CmdTrig_spectrum_save=True
         #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.CmdTrig_Save_spectrum_write
         
     def read_Server_Save_File_Busy(self, attr):
@@ -227,25 +236,18 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
         
         #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.Server_Save_File_Busy_read
         
-    def write_CmdTrig_sweep_Start(self, attr):
-        self.debug_stream("In write_CmdTrig_sweep_Start()")
+    def write_CmdTrig_measure_Start(self, attr):
+        self.debug_stream("In write_CmdTrig_measure_Start()")
         data = attr.get_write_value()
-        #----- PROTECTED REGION ID(Sweep_spectra_DLD.CmdTrig_sweep_Start_write) ENABLED START -----#
-        self.CmdTrig_sweep_Start=data
-        #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.CmdTrig_sweep_Start_write
-        
-    def write_CmdTrig_stack_Start(self, attr):
-        self.debug_stream("In write_CmdTrig_stack_Start()")
-        data = attr.get_write_value()
-        #----- PROTECTED REGION ID(Sweep_spectra_DLD.CmdTrig_stack_Start_write) ENABLED START -----#
-        self.CmdTrig_stack_Start=data
-        #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.CmdTrig_stack_Start_write
+        #----- PROTECTED REGION ID(Sweep_spectra_DLD.CmdTrig_measure_Start_write) ENABLED START -----#
+        self.CmdTrig_measure_Start=data
+        #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.CmdTrig_measure_Start_write
         
     def write_CmdTrig_Save_stack(self, attr):
         self.debug_stream("In write_CmdTrig_Save_stack()")
         data = attr.get_write_value()
         #----- PROTECTED REGION ID(Sweep_spectra_DLD.CmdTrig_Save_stack_write) ENABLED START -----#
-        self.SaveStack()
+        self.CmdTrig_stack_save=True
         #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.CmdTrig_Save_stack_write
         
     def read_Progress(self, attr):
@@ -254,6 +256,34 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
         attr.set_value(self.attr_Progress_read)
         
         #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.Progress_read
+        
+    def read_Check_stack_Saved(self, attr):
+        self.debug_stream("In read_Check_stack_Saved()")
+        #----- PROTECTED REGION ID(Sweep_spectra_DLD.Check_stack_Saved_read) ENABLED START -----#
+        attr.set_value(self.attr_Check_stack_Saved_read)
+        
+        #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.Check_stack_Saved_read
+        
+    def read_Check_spectrum_Saved(self, attr):
+        self.debug_stream("In read_Check_spectrum_Saved()")
+        #----- PROTECTED REGION ID(Sweep_spectra_DLD.Check_spectrum_Saved_read) ENABLED START -----#
+        attr.set_value(self.attr_Check_spectrum_Saved_read)
+        
+        #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.Check_spectrum_Saved_read
+        
+    def read_Check_stack_NotSaved(self, attr):
+        self.debug_stream("In read_Check_stack_NotSaved()")
+        #----- PROTECTED REGION ID(Sweep_spectra_DLD.Check_stack_NotSaved_read) ENABLED START -----#
+        attr.set_value(self.attr_Check_stack_NotSaved_read)
+        
+        #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.Check_stack_NotSaved_read
+        
+    def read_Check_spectrum_NotSaved(self, attr):
+        self.debug_stream("In read_Check_spectrum_NotSaved()")
+        #----- PROTECTED REGION ID(Sweep_spectra_DLD.Check_spectrum_NotSaved_read) ENABLED START -----#
+        attr.set_value(self.attr_Check_spectrum_NotSaved_read)
+        
+        #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.Check_spectrum_NotSaved_read
         
     def read_sp_y(self, attr):
         self.debug_stream("In read_sp_y()")
@@ -290,118 +320,116 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
     def change_scale(self):
         while True:
             if self.change_scale_trig==True and self.attr_Sample_V_min_read<self.attr_Sample_V_max_read:
-                self.attr_sp_x_read=np.arange(start=self.attr_Sample_V_max_read, stop=self.attr_Sample_V_min_read-round(self.attr_Voltage_step_read,3), step=self.attr_Voltage_step_read)#=[0.0]*(int((self.attr_Sample_V_max_read-self.attr_Sample_V_min_read)/self.attr_Voltage_step_read+1))#np.delete(self.attr_sp_x_read,[1:],0)                
-                self.attr_sp_y_read=[0.0]*len(self.attr_sp_x_read)
-                
-                self.stack=np.array([[[0.0]*self.tdc.read_attribute("Hist_Accu_XY").dim_x]*self.tdc.read_attribute("Hist_Accu_XY").dim_y]*len(self.attr_sp_x_read))
-                self.stack[0,:,:]=np.array(self.tdc.read_attribute("Hist_Accu_XY").value,dtype=np.float32)
-                #print self.stack.shape
+                self.attr_sp_x_read=np.arange(start=self.attr_Sample_V_min_read, stop=self.attr_Sample_V_max_read+round(self.attr_Voltage_step_read,3), step=self.attr_Voltage_step_read, dtype=np.float32)
+                #print 1                
+                self.attr_sp_y_read=[0]*len(self.attr_sp_x_read)
+                #print 2
+                x=self.tdc.read_attribute("Hist_Accu_XY").dim_x
+                #print 21
+                y=self.tdc.read_attribute("Hist_Accu_XY").dim_y
+                #print 22
+                self.stack=np.array([[[0]*x]*y]*len(self.attr_sp_x_read),dtype=np.int)
+                #print 3                
                 self.change_scale_trig=False
+                #print (self.stack.nbytes)/1024/1024, type(self.stack)
+                #print self.attr_sp_x_read, len(self.attr_sp_x_read)
             time.sleep(1)
     def measure(self):
         while True:
             i=0
-            while self.CmdTrig_sweep_Start==True:
+            while self.CmdTrig_measure_Start==True:
+                self.attr_Check_stack_Saved_read=False
+                self.attr_Check_spectrum_Saved_read=False
+                self.attr_Check_stack_NotSaved_read=False
+                self.attr_Check_spectrum_NotSaved_read=False
+                self.Check_File_Saved=2
                 print "Start measurements"
                 self.attr_Progress_read=round(100*i/len(self.attr_sp_x_read),3)
                 self.tdc.write_attribute("ExposureAccu", self.attr_Exposure_read)
                 self.sample.write_attribute("voltage_w",round(self.attr_sp_x_read[i],2))    
                 while self.sample.read_attribute("voltage_r").value<self.attr_sp_x_read[i]-0.05 or self.sample.read_attribute("voltage_r").value>self.attr_sp_x_read[i]+0.05:
-                    print "Delay!"
+                    #print "Delay!"
                     time.sleep(0.1)
                 self.tdc.write_attribute("CmdTrig_Accumulation_Start",1)
                 while self.tdc.read_attribute("Accumulation_Running").value==True:
-                    print "Delay! Accumulation is running!"                    
-                    time.sleep(0.1)
-                time.sleep(0.2)
+                    #print "Delay! Accumulation is running!"
+                    time.sleep(0.2)
+                time.sleep(2)
                 self.attr_sp_y_read[i]=np.sum(self.tdc.read_attribute("Hist_Accu_T").value)
+                #print type(self.tdc.read_attribute("Hist_Accu_XY").value[0][0])
+                self.stack[i,:,:]=np.array(self.tdc.read_attribute("Hist_Accu_XY").value,dtype=np.int)
+                #print self.tdc.read_attribute("Hist_Accu_T").value
                 i+=1
                 if i==len(self.attr_sp_x_read):
-                    self.CmdTrig_sweep_Start=False
+                    self.CmdTrig_measure_Start=False
                     self.attr_Progress_read=round(100*i/len(self.attr_sp_x_read),3)
                     i=0
-                elif self.CmdTrig_sweep_Start==False:
+                elif self.CmdTrig_measure_Start==False:
                     self.tdc.write_attribute("CmdTrig_Accumulation_Stop",1)
                     i=0
-            while self.CmdTrig_stack_Start==True:
-                print "Start measurements"
-                self.attr_Progress_read=round(100*i/len(self.attr_sp_x_read),3)
-                self.tdc.write_attribute("ExposureAccu", self.attr_Exposure_read)
-                self.sample.write_attribute("voltage_w",round(self.attr_sp_x_read[i],2))
-                while self.sample.read_attribute("voltage_r").value<self.attr_sp_x_read[i]-0.05 or self.sample.read_attribute("voltage_r").value>self.attr_sp_x_read[i]+0.05:
-                    print "Delay!"
-                    time.sleep(0.1) 
-                self.tdc.write_attribute("CmdTrig_Accumulation_Start",1)
-                while self.tdc.read_attribute("Accumulation_Running").value==True:
-                    print "Delay! Accumulation is running!"                    
-                    time.sleep(0.1)
-                self.stack[i,:,:]=np.array(self.tdc.read_attribute("Hist_Accu_XY").value,dtype=np.float32)
-                i+=1
-
-                if i==len(self.attr_sp_x_read):
-                    self.CmdTrig_stack_Start=False
-                    self.attr_Progress_read=round(100*i/len(self.attr_sp_x_read),3)
-                    i=0
-                    print 1
-                elif self.CmdTrig_stack_Start==False:
-                    self.tdc.write_attribute("CmdTrig_Accumulation_Stop",1)
-                    i=0
-                    print 2
+    def save(self):
+        while True:
+            now=time.strftime("%Y_%m_%d", time.gmtime())
+            if self.Save_Directory=="" or self.Save_Filename=="":
+                self.attr_measurements_error_read="Check file path!"
+            else:
+                dir_path=self.Save_Directory+"/"+now
+                if not os.path.exists(dir_path):
+                    os.makedirs(dir_path)
+######################                                   Spectrum script            ######################################
+                if self.CmdTrig_spectrum_save==True and self.CmdTrig_measure_Start==False:
+                    file_path=dir_path+"/"+str(self.Save_Filecounter)+"_"+self.Save_Filename+".txt"
+                    print (file_path)                
+                    if os.path.isfile(file_path)==False and self.CmdTrig_measure_Start==False:
+                        np.savetxt(file_path, np.c_[self.attr_sp_x_read, self.attr_sp_y_read])
+                        self.file_counter=PyTango.DeviceProxy("sweep/spectra/ktof")
+                        self.file_counter.write_attribute("Save_Filecounter",self.Save_Filecounter+1)
+                        if os.path.isfile(file_path)==True:
+                            self.attr_Check_spectrum_Saved_read=True
+                            self.attr_Check_spectrum_NotSaved_read=False
+                            self.attr_measurements_error_read="spectrum saved"
+                    elif self.CmdTrig_measure_Start==True:
+                        self.attr_measurements_error_read="Measurements in progress!"
+                        self.attr_Check_spectrum_NotSaved_read=True
+                        self.attr_Check_spectrum_Saved_read=False
+                    elif os.path.isfile(file_path)==True:
+                        self.attr_measurements_error_read="File already exists!"
+                        self.attr_Check_spectrum_NotSaved_read=True
+                        self.attr_Check_spectrum_Saved_read=False
+                    else:
+                        self.attr_Check_spectrum_NotSaved_read=True
+                        self.attr_Check_spectrum_Saved_read=False
+                    self.CmdTrig_spectrum_save=False
+######################                                   Stack script            ######################################
+                elif self.CmdTrig_stack_save==True:
+                    file_path=dir_path+"/"+str(self.Save_Filecounter)+"_"+self.Save_Filename+".tiff"
+                    print (file_path)                
+                    if os.path.isfile(file_path)==False and self.CmdTrig_measure_Start==False:
+                        imlist = []
+                        for m in self.stack:
+                            imlist.append(Image.fromarray(m.astype('uint32')))
+                        imlist[0].save(file_path, compression="tiff_deflate", save_all=True, append_images=imlist[1:])
+                        print "saved"
+                        if os.path.isfile(file_path)==True:
+                            print "file exists"
+                            self.attr_Check_stack_Saved_read=True
+                            self.CmdTrig_stack_save=False
+                            self.attr_measurements_error_read="stack saved"
+                        self.file_counter=PyTango.DeviceProxy("sweep/spectra/ktof")
+                        self.file_counter.write_attribute("Save_Filecounter",self.Save_Filecounter+1)
+                    elif self.CmdTrig_measure_Start==True:
+                        self.attr_Check_stack_NotSaved_read=True
+                        self.attr_Check_stack_Saved_read=False
+                        self.attr_measurements_error_read="Measurements in progress!"
+                    elif os.path.isfile(file_path)==True:
+                        self.attr_Check_stack_NotSaved_read=True
+                        self.attr_Check_stack_Saved_read=False
+                        self.attr_measurements_error_read="File already exists!"
+                    else:
+                        self.attr_Check_stack_Saved_read=False
+                        self.attr_Check_stack_NotSaved_read=True
+                    self.CmdTrig_stack_save=False
             time.sleep(1)
-
-    def SaveStack(self):
-        now=time.strftime("%Y_%m_%d", time.gmtime())
-        self.attr_Server_Save_Stack_Busy_read=True
-        if self.Save_Directory=="" or self.Save_Filename=="":
-            self.attr_measurements_error_read="Check file path!"
-        else:
-            dir_path=self.Save_Directory+"/"+now
-            if os.path.isdir(dir_path)==False:
-                os.mkdir(dir_path)
-            else:
-                file_path=dir_path+"/"+str(self.Save_Filecounter)+"_"+self.Save_Filename+".tiff"
-                print (file_path)                
-                if os.path.isfile(file_path)==False:
-                    print self.stack.shape
-                    imlist = []
-                    for m in self.stack:
-                        imlist.append(Image.fromarray(m))
-                    imlist[0].save(file_path, compression="tiff_deflate", save_all=True, append_images=imlist[1:])
-                    #im.save(file_path, compression="tiff_deflate", save_all=True)
-                    #imsave(file_path, self.stack)#np.savetxt(file_path, np.c_[self.attr_sp_x_read, self.attr_sp_y_read])
-                    self.file_counter=PyTango.DeviceProxy("sweep/spectra/ktof")
-                    self.file_counter.write_attribute("Save_Filecounter",self.Save_Filecounter+1)
-                elif self.CmdTrig_sweep_Start==True:
-                    self.attr_measurements_error_read="Measurements in progress!"
-                elif os.path.isfile(file_path)==True:
-                    self.attr_measurements_error_read="File already exists!"
-            
-        self.attr_Server_Save_Stack_Busy_read=False
-
-          
-    def SaveSpectrum(self):
-        now=time.strftime("%Y_%m_%d", time.gmtime())
-        self.attr_Server_Save_File_Busy_read=True
-        if self.Save_Directory=="" or self.Save_Filename=="":
-            self.attr_measurements_error_read="Check file path!"
-        else:
-            dir_path=self.Save_Directory+"/"+now
-            if os.path.isdir(dir_path)==False:
-                os.mkdir(dir_path)
-            else:
-                file_path=dir_path+"/"+str(self.Save_Filecounter)+"_"+self.Save_Filename+".txt"
-                print (file_path)                
-                if os.path.isfile(file_path)==False:
-                    np.savetxt(file_path, np.c_[self.attr_sp_x_read, self.attr_sp_y_read])
-                    self.file_counter=PyTango.DeviceProxy("sweep/spectra/ktof")
-                    self.file_counter.write_attribute("Save_Filecounter",self.Save_Filecounter+1)
-                elif self.CmdTrig_sweep_Start==True:
-                    self.attr_measurements_error_read="Measurements in progress!"
-                elif os.path.isfile(file_path)==True:
-                    self.attr_measurements_error_read="File already exists!"
-            
-        self.attr_Server_Save_File_Busy_read=False
-
                 
     #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.programmer_methods
 
@@ -490,11 +518,7 @@ class Sweep_spectra_DLDClass(PyTango.DeviceClass):
             [[PyTango.DevBoolean,
             PyTango.SCALAR,
             PyTango.READ]],
-        'CmdTrig_sweep_Start':
-            [[PyTango.DevBoolean,
-            PyTango.SCALAR,
-            PyTango.WRITE]],
-        'CmdTrig_stack_Start':
+        'CmdTrig_measure_Start':
             [[PyTango.DevBoolean,
             PyTango.SCALAR,
             PyTango.WRITE]],
@@ -506,12 +530,28 @@ class Sweep_spectra_DLDClass(PyTango.DeviceClass):
             [[PyTango.DevDouble,
             PyTango.SCALAR,
             PyTango.READ]],
+        'Check_stack_Saved':
+            [[PyTango.DevBoolean,
+            PyTango.SCALAR,
+            PyTango.READ]],
+        'Check_spectrum_Saved':
+            [[PyTango.DevBoolean,
+            PyTango.SCALAR,
+            PyTango.READ]],
+        'Check_stack_NotSaved':
+            [[PyTango.DevBoolean,
+            PyTango.SCALAR,
+            PyTango.READ]],
+        'Check_spectrum_NotSaved':
+            [[PyTango.DevBoolean,
+            PyTango.SCALAR,
+            PyTango.READ]],
         'sp_y':
-            [[PyTango.DevDouble,
+            [[PyTango.DevLong64,
             PyTango.SPECTRUM,
             PyTango.READ, 10000]],
         'sp_x':
-            [[PyTango.DevDouble,
+            [[PyTango.DevFloat,
             PyTango.SPECTRUM,
             PyTango.READ, 10000]],
         }
