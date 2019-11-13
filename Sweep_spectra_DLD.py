@@ -50,7 +50,7 @@ import time
 import threading
 import numpy as np
 import os
-from tifffile import imsave
+#from tifffile import imsave
 from PIL import Image
 #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.additionnal_import
 
@@ -94,8 +94,10 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
         self.attr_Check_spectrum_Saved_read = False
         self.attr_Check_stack_NotSaved_read = False
         self.attr_Check_spectrum_NotSaved_read = False
+        self.attr_energy_slice_read = 0.0
         self.attr_sp_y_read = [0]
         self.attr_sp_x_read = [0.0]
+        self.attr_image_to_show_read = [[0]]
         #----- PROTECTED REGION ID(Sweep_spectra_DLD.init_device) ENABLED START -----#
         self.sample=PyTango.DeviceProxy("set/sample/voltage")
         self.tdc=PyTango.DeviceProxy("ktof/tdc/tdc1")      
@@ -110,6 +112,8 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
         self.CmdTrig_spectrum_save=False
         self.attr_measurements_error_read="No error"
         self.stack=np.array([[[0]]])
+        self.slice_to_show=0
+        self.show_slice_trg=False
         if not 'scale_thread' in dir(self):
             self.scale_thread = threading.Thread(target=self.change_scale)
             self.scale_thread.setDaemon(True)
@@ -122,6 +126,10 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
             self.save_thread = threading.Thread(target=self.save)
             self.save_thread.setDaemon(True)
             self.save_thread.start()
+        if not 'show_thread' in dir(self):
+            self.show_thread = threading.Thread(target=self.show)
+            self.show_thread.setDaemon(True)
+            self.show_thread.start()
         #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.init_device
 
     def always_executed_hook(self):
@@ -285,6 +293,21 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
         
         #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.Check_spectrum_NotSaved_read
         
+    def read_energy_slice(self, attr):
+        self.debug_stream("In read_energy_slice()")
+        #----- PROTECTED REGION ID(Sweep_spectra_DLD.energy_slice_read) ENABLED START -----#
+        attr.set_value(self.attr_energy_slice_read)
+        
+        #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.energy_slice_read
+        
+    def write_slice_counter(self, attr):
+        self.debug_stream("In write_slice_counter()")
+        data = attr.get_write_value()
+        #----- PROTECTED REGION ID(Sweep_spectra_DLD.slice_counter_write) ENABLED START -----#
+        self.slice_to_show=data
+        self.show_slice_trg=True
+        #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.slice_counter_write
+        
     def read_sp_y(self, attr):
         self.debug_stream("In read_sp_y()")
         #----- PROTECTED REGION ID(Sweep_spectra_DLD.sp_y_read) ENABLED START -----#
@@ -300,6 +323,13 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
         attr.set_value(self.attr_sp_x_read)
 
         #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.sp_x_read
+        
+    def read_image_to_show(self, attr):
+        self.debug_stream("In read_image_to_show()")
+        #----- PROTECTED REGION ID(Sweep_spectra_DLD.image_to_show_read) ENABLED START -----#
+        attr.set_value(self.attr_image_to_show_read)
+        
+        #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.image_to_show_read
         
     
     
@@ -317,6 +347,16 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
     
 
     #----- PROTECTED REGION ID(Sweep_spectra_DLD.programmer_methods) ENABLED START -----#
+    def show(self):
+        while True:
+            if self.show_slice_trg==True and (self.slice_to_show>=0 and self.slice_to_show<=len(self.attr_sp_x_read)):
+                self.attr_image_to_show_read=self.stack[self.slice_to_show,:,:] 
+                self.attr_energy_slice_read=self.attr_sp_x_read[self.slice_to_show]    
+                self.show_slice_trg==False
+                print "new slice"
+            if self.show_slice_trg==True:
+                self.show_slice_trg=False
+            time.sleep(1)
     def change_scale(self):
         while True:
             if self.change_scale_trig==True and self.attr_Sample_V_min_read<self.attr_Sample_V_max_read:
@@ -324,15 +364,14 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
                 #print 1                
                 self.attr_sp_y_read=[0]*len(self.attr_sp_x_read)
                 #print 2
-                x=self.tdc.read_attribute("Hist_Accu_XY").dim_x
+                x=100#self.tdc.read_attribute("Hist_Accu_XY").dim_x
                 #print 21
-                y=self.tdc.read_attribute("Hist_Accu_XY").dim_y
+                y=100#self.tdc.read_attribute("Hist_Accu_XY").dim_y
                 #print 22
                 self.stack=np.array([[[0]*x]*y]*len(self.attr_sp_x_read),dtype=np.int)
                 #print 3                
                 self.change_scale_trig=False
                 #print (self.stack.nbytes)/1024/1024, type(self.stack)
-                #print self.attr_sp_x_read, len(self.attr_sp_x_read)
             time.sleep(1)
     def measure(self):
         while True:
@@ -354,7 +393,7 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
                 while self.tdc.read_attribute("Accumulation_Running").value==True:
                     #print "Delay! Accumulation is running!"
                     time.sleep(0.2)
-                time.sleep(2)
+                time.sleep(1)
                 self.attr_sp_y_read[i]=np.sum(self.tdc.read_attribute("Hist_Accu_T").value)
                 #print type(self.tdc.read_attribute("Hist_Accu_XY").value[0][0])
                 self.stack[i,:,:]=np.array(self.tdc.read_attribute("Hist_Accu_XY").value,dtype=np.int)
@@ -367,6 +406,7 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
                 elif self.CmdTrig_measure_Start==False:
                     self.tdc.write_attribute("CmdTrig_Accumulation_Stop",1)
                     i=0
+            time.sleep(1)
     def save(self):
         while True:
             now=time.strftime("%Y_%m_%d", time.gmtime())
@@ -546,6 +586,17 @@ class Sweep_spectra_DLDClass(PyTango.DeviceClass):
             [[PyTango.DevBoolean,
             PyTango.SCALAR,
             PyTango.READ]],
+        'energy_slice':
+            [[PyTango.DevDouble,
+            PyTango.SCALAR,
+            PyTango.READ]],
+        'slice_counter':
+            [[PyTango.DevLong,
+            PyTango.SCALAR,
+            PyTango.WRITE],
+            {
+                'Memorized':"true_without_hard_applied"
+            } ],
         'sp_y':
             [[PyTango.DevLong64,
             PyTango.SPECTRUM,
@@ -554,6 +605,10 @@ class Sweep_spectra_DLDClass(PyTango.DeviceClass):
             [[PyTango.DevFloat,
             PyTango.SPECTRUM,
             PyTango.READ, 10000]],
+        'image_to_show':
+            [[PyTango.DevLong,
+            PyTango.IMAGE,
+            PyTango.READ, 2000, 2000]],
         }
 
 
