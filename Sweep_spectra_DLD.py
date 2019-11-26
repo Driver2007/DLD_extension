@@ -378,6 +378,7 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
                     y=self.tdc.read_attribute("Hist_Accu_XY").dim_y
                     self.stack=np.array([[[0]*x]*y]*len(self.attr_sp_x_read),dtype=np.int)
                     self.attr_Check_scale_set_read=True
+                    self.attr_Progress_read=0
                 else:
                     self.attr_Check_scale_set_read=False
                     self.attr_measurements_error_read="Check TDC"
@@ -385,7 +386,7 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
             time.sleep(1)
     def measure(self):
         while True:
-            i=0
+            i=len(self.attr_sp_x_read)-1#0
             while self.CmdTrig_measure_Start==True:
                 self.attr_Check_stack_Saved_read=False
                 self.attr_Check_spectrum_Saved_read=False
@@ -410,7 +411,7 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
                     self.CmdTrig_measure_Start=False
                     break
                 self.attr_measurements_error_read="Start measurements" 
-                self.attr_Progress_read=round(100*i/len(self.attr_sp_x_read),3)
+                self.attr_Progress_read=100-round(100*i/(len(self.attr_sp_x_read)-1),3)#round(100*i/len(self.attr_sp_x_read),3)
                 self.tdc.write_attribute("ExposureAccu", self.attr_Exposure_read)
                 self.sample.write_attribute("Sample_VUSet",round(self.attr_sp_x_read[i],2)) 
                 #self.sample.write_attribute("voltage_w",round(self.attr_sp_x_read[i],2))    
@@ -435,14 +436,14 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
                 #print type(self.tdc.read_attribute("Hist_Accu_XY").value[0][0])
                 self.stack[i,:,:]=np.array(self.tdc.read_attribute("Hist_Accu_XY").value,dtype=np.int)
                 #print self.tdc.read_attribute("Hist_Accu_T").value
-                i+=1
-                if i==len(self.attr_sp_x_read):
+                i-=1
+                if i<0:#==len(self.attr_sp_x_read):
                     self.CmdTrig_measure_Start=False
-                    self.attr_Progress_read=round(100*i/len(self.attr_sp_x_read),3)
-                    i=0
+                    self.attr_Progress_read=100#-round(100*i/(len(self.attr_sp_x_read)-1),3)#round(100*i/len(self.attr_sp_x_read),3)
+                    i=len(self.attr_sp_x_read)-1#0
                 elif self.CmdTrig_measure_Start==False:
                     self.tdc.write_attribute("CmdTrig_Accumulation_Stop",1)
-                    i=0
+                    i=len(self.attr_sp_x_read)-1#0
             time.sleep(1)
     def save(self):
         while True:
