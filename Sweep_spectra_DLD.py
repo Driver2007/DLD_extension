@@ -50,7 +50,7 @@ import time
 import threading
 import numpy as np
 import os
-#from tifffile import imsave
+import tifffile
 from PIL import Image
 #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.additionnal_import
 
@@ -101,7 +101,6 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
         self.attr_image_to_show_read = [[0]]
         #----- PROTECTED REGION ID(Sweep_spectra_DLD.init_device) ENABLED START -----#
         #self.sample=PyTango.DeviceProxy("set/sample/voltage")
-        self.sample=PyTango.DeviceProxy("ktof/logic/lens1")
         self.tdc=PyTango.DeviceProxy("ktof/tdc/tdc1")
         self.Save_Filecounter=0
         self.Save_Directory=""
@@ -113,7 +112,7 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
         self.CmdTrig_stack_save=False
         self.CmdTrig_spectrum_save=False
         self.attr_measurements_error_read="No error"
-        self.stack=np.array([[[0]]])
+        #self.stack=np.array([[[0]]])
         self.slice_to_show=0
         self.show_slice_trg=False
         self.stop_measurements=False
@@ -318,6 +317,24 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
         
         #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.Check_scale_set_read
         
+    def write_sample_iseg(self, attr):
+        self.debug_stream("In write_sample_iseg()")
+        data = attr.get_write_value()
+        #----- PROTECTED REGION ID(Sweep_spectra_DLD.sample_iseg_write) ENABLED START -----#
+        if data==True:
+            PyTango.DeviceProxy("sweep/spectra/ktof").write_attribute("sample_srs",False)
+            self.sample=PyTango.DeviceProxy("ktof/logic/lens1")
+        #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.sample_iseg_write
+        
+    def write_sample_srs(self, attr):
+        self.debug_stream("In write_sample_srs()")
+        data = attr.get_write_value()
+        #----- PROTECTED REGION ID(Sweep_spectra_DLD.sample_srs_write) ENABLED START -----#
+        if data==True:
+            PyTango.DeviceProxy("sweep/spectra/ktof").write_attribute("sample_iseg",False)        
+            self.sample=PyTango.DeviceProxy("srs/power/supply1")
+        #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.sample_srs_write
+        
     def read_sp_y(self, attr):
         self.debug_stream("In read_sp_y()")
         #----- PROTECTED REGION ID(Sweep_spectra_DLD.sp_y_read) ENABLED START -----#
@@ -370,13 +387,14 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
     def change_scale(self):
         while True:
             if self.change_scale_trig==True and self.attr_Voltage_step_read!=0.0 and self.attr_Sample_V_min_read<self.attr_Sample_V_max_read:
-                self.attr_sp_x_read=np.arange(start=self.attr_Sample_V_min_read, stop=self.attr_Sample_V_max_read+round(self.attr_Voltage_step_read,3), step=self.attr_Voltage_step_read, dtype=np.float32)
-                #print 1                
+                self.attr_sp_x_read=np.arange(start=self.attr_Sample_V_min_read, stop=self.attr_Sample_V_max_read+round(self.attr_Voltage_step_read,3), step=round(self.attr_Voltage_step_read,3), dtype=np.float32)
+                print self.attr_sp_x_read                
                 self.attr_sp_y_read=[0]*len(self.attr_sp_x_read)
                 if self.tdc.state()==PyTango.DevState.ON:
-                    x=self.tdc.read_attribute("Hist_Accu_XY").dim_x
-                    y=self.tdc.read_attribute("Hist_Accu_XY").dim_y
-                    self.stack=np.array([[[0]*x]*y]*len(self.attr_sp_x_read),dtype=np.int)
+                    #x=self.tdc.read_attribute("Hist_Accu_XY").dim_x
+                    #y=self.tdc.read_attribute("Hist_Accu_XY").dim_y
+                    #self.stack=np.array([[[0]*x]*y]*len(self.attr_sp_x_read),dtype=np.int)
+                    #self.image=np.array([[[0]*x]*y],dtype=np.int)
                     self.attr_Check_scale_set_read=True
                     self.attr_Progress_read=0
                 else:
@@ -385,66 +403,93 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
                 self.change_scale_trig=False
             time.sleep(1)
     def measure(self):
+        file_path=""
         while True:
-            i=len(self.attr_sp_x_read)-1#0
-            while self.CmdTrig_measure_Start==True:
-                self.attr_Check_stack_Saved_read=False
-                self.attr_Check_spectrum_Saved_read=False
-                self.attr_Check_stack_NotSaved_read=False
-                self.attr_Check_spectrum_NotSaved_read=False
-                self.attr_Server_Save_File_Busy_read=False
-                self.Check_File_Saved=2
-                if self.attr_Check_scale_set_read==False:
-                    self.attr_measurements_error_read="Check scale"
-                    self.CmdTrig_measure_Start=False
-                    break                    
-                if self.sample.state()!=PyTango.DevState.ON:
-                    self.attr_measurements_error_read="Check ISEG"
-                    self.CmdTrig_measure_Start=False
-                    break
-                if self.sample.read_attribute("Sample_VSetOn").value!=True:
-                    self.attr_measurements_error_read="Check Sample potential"
-                    self.CmdTrig_measure_Start=False                    
-                    break
-                if self.tdc.state()!=PyTango.DevState.ON:
-                    self.attr_measurements_error_read="Check TDC server"                    
-                    self.CmdTrig_measure_Start=False
-                    break
-                self.attr_measurements_error_read="Start measurements" 
-                self.attr_Progress_read=100-round(100*i/(len(self.attr_sp_x_read)-1),3)#round(100*i/len(self.attr_sp_x_read),3)
-                self.tdc.write_attribute("ExposureAccu", self.attr_Exposure_read)
-                self.sample.write_attribute("Sample_VUSet",round(self.attr_sp_x_read[i],2)) 
-                #self.sample.write_attribute("voltage_w",round(self.attr_sp_x_read[i],2))    
-                while self.sample.read_attribute("Sample_VURead").value<self.attr_sp_x_read[i]-0.05 or self.sample.read_attribute("Sample_VURead").value>self.attr_sp_x_read[i]+0.05:
-                    #print "Delay!"
-                    time.sleep(0.1)
-                self.tdc.write_attribute("CmdTrig_Accumulation_Start",1)
-                k=0.0
-                while self.tdc.read_attribute("Accumulation_Running").value==True:
-                    #print "Delay! Accumulation is running!"
-                    time.sleep(0.2)
-                    k+=0.2
-                    if k>3*self.attr_Exposure_read:
-                        self.stop_measurements=True
-                        break
-                if self.stop_measurements==True:
-                    self.attr_measurements_error_read="Check TDC server"                    
-                    self.CmdTrig_measure_Start=False
-                    break
-                time.sleep(1)
-                self.attr_sp_y_read[i]=np.sum(self.tdc.read_attribute("Hist_Accu_T").value)
-                #print type(self.tdc.read_attribute("Hist_Accu_XY").value[0][0])
-                self.stack[i,:,:]=np.array(self.tdc.read_attribute("Hist_Accu_XY").value,dtype=np.int)
-                #print self.tdc.read_attribute("Hist_Accu_T").value
-                i-=1
-                if i<0:#==len(self.attr_sp_x_read):
-                    self.CmdTrig_measure_Start=False
-                    self.attr_Progress_read=100#-round(100*i/(len(self.attr_sp_x_read)-1),3)#round(100*i/len(self.attr_sp_x_read),3)
-                    i=len(self.attr_sp_x_read)-1#0
-                elif self.CmdTrig_measure_Start==False:
-                    self.tdc.write_attribute("CmdTrig_Accumulation_Stop",1)
-                    i=len(self.attr_sp_x_read)-1#0
+            i=len(self.attr_sp_x_read)-1#0                
+            if self.CmdTrig_measure_Start==True:
+                self.file_counter=PyTango.DeviceProxy("sweep/spectra/ktof")
+                self.file_counter.write_attribute("Save_Filecounter",self.Save_Filecounter+1)
+                file_path=self.create_file_path()
+            if file_path=="":
+                self.CmdTrig_measure_Start=False
+            elif self.CmdTrig_measure_Start==True:                   
+                with tifffile.TiffWriter(file_path) as tif:
+                    while self.CmdTrig_measure_Start==True:                
+                        self.attr_Check_stack_Saved_read=False
+                        self.attr_Check_spectrum_Saved_read=False
+                        self.attr_Check_stack_NotSaved_read=False
+                        self.attr_Check_spectrum_NotSaved_read=False
+                        self.attr_Server_Save_File_Busy_read=False
+                        self.Check_File_Saved=2
+                        if self.attr_Check_scale_set_read==False:
+                            self.attr_measurements_error_read="Check scale"
+                            self.CmdTrig_measure_Start=False
+                            break                    
+                        if self.sample.state()!=PyTango.DevState.ON:
+                            self.attr_measurements_error_read="Check ISEG"
+                            self.CmdTrig_measure_Start=False
+                            break
+                        if self.sample.read_attribute("Sample_VSetOn").value!=True:
+                            self.attr_measurements_error_read="Check Sample potential"
+                            self.CmdTrig_measure_Start=False                    
+                            break
+                        if self.tdc.state()!=PyTango.DevState.ON:
+                            self.attr_measurements_error_read="Check TDC server"                    
+                            self.CmdTrig_measure_Start=False
+                            break
+                        self.attr_measurements_error_read="Start measurements" 
+                        self.attr_Progress_read=100-round(100*i/(len(self.attr_sp_x_read)-1),3)#round(100*i/len(self.attr_sp_x_read),3)
+                        self.tdc.write_attribute("ExposureAccu", self.attr_Exposure_read)
+                        self.sample.write_attribute("Sample_VUSet",round(self.attr_sp_x_read[i],3)) 
+                        #self.sample.write_attribute("voltage_w",round(self.attr_sp_x_read[i],2))    
+                        while self.sample.read_attribute("Sample_VURead").value<self.attr_sp_x_read[i]-0.05 or self.sample.read_attribute("Sample_VURead").value>self.attr_sp_x_read[i]+0.05:
+                            #print "Delay!"
+                            time.sleep(0.1)
+                        self.tdc.write_attribute("CmdTrig_Accumulation_Start",1)
+                        k=0.0
+                        while self.tdc.read_attribute("Accumulation_Running").value==True:
+                            #print "Delay! Accumulation is running!"
+                            time.sleep(0.2)
+                            k+=0.2
+                            if k>3*self.attr_Exposure_read:
+                                self.stop_measurements=True
+                                break
+                        if self.stop_measurements==True:
+                            self.attr_measurements_error_read="Check TDC server"                    
+                            self.CmdTrig_measure_Start=False
+                            break
+                        time.sleep(1)
+                        
+                        self.attr_sp_y_read[i]=np.sum(self.tdc.read_attribute("Hist_Accu_T").value)
+                        #print type(self.tdc.read_attribute("Hist_Accu_XY").value[0][0])
+                        #self.stack[i,:,:]=np.array(self.tdc.read_attribute("Hist_Accu_XY").value,dtype=np.int)
+                        #print self.tdc.read_attribute("Hist_Accu_T").value
+                        #data = np.random.randint(0, 2**12, (701, 701), 'uint32')
+                        #tif.save(data, compress=6, photometric='minisblack')
+                        tif.save(np.array(self.tdc.read_attribute("Hist_Accu_XY").value,dtype=np.uint32), compress=6, photometric='minisblack')
+                        i-=1
+                        if i<0:#==len(self.attr_sp_x_read):
+                            self.CmdTrig_measure_Start=False
+                            self.attr_Progress_read=100#-round(100*i/(len(self.attr_sp_x_read)-1),3)#round(100*i/len(self.attr_sp_x_read),3)
+                            i=len(self.attr_sp_x_read)-1#0
+                        elif self.CmdTrig_measure_Start==False:
+                            self.tdc.write_attribute("CmdTrig_Accumulation_Stop",1)
+                            i=len(self.attr_sp_x_read)-1#0
             time.sleep(1)
+    def create_file_path(self):
+        file_path=""
+        now=time.strftime("%Y_%m_%d", time.gmtime())
+        if self.Save_Directory=="" or self.Save_Filename=="":
+            self.attr_measurements_error_read="Check file path!"
+            print "Check file path!"
+            return file_path
+        else:
+            dir_path=self.Save_Directory+"/"+now
+            if not os.path.exists(dir_path):
+                os.makedirs(dir_path)
+            file_path=dir_path+"/"+str(self.Save_Filecounter)+"_"+self.Save_Filename+".tiff"
+            print (file_path)
+            return file_path
     def save(self):
         while True:
             now=time.strftime("%Y_%m_%d", time.gmtime())
@@ -646,6 +691,20 @@ class Sweep_spectra_DLDClass(PyTango.DeviceClass):
             [[PyTango.DevBoolean,
             PyTango.SCALAR,
             PyTango.READ]],
+        'sample_iseg':
+            [[PyTango.DevBoolean,
+            PyTango.SCALAR,
+            PyTango.WRITE],
+            {
+                'Memorized':"true"
+            } ],
+        'sample_srs':
+            [[PyTango.DevBoolean,
+            PyTango.SCALAR,
+            PyTango.WRITE],
+            {
+                'Memorized':"true"
+            } ],
         'sp_y':
             [[PyTango.DevLong64,
             PyTango.SPECTRUM,
