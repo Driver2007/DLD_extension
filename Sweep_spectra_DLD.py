@@ -61,7 +61,7 @@ from email.mime.text import MIMEText
 import datetime
 import pickle
 import os.path
-from apiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload
 from googleapiclient.discovery import build
 
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -129,9 +129,12 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
         self.change_scale_trig=False
         self.CmdTrig_stack_save=False
         self.CmdTrig_spectrum_save=False
-        self.upload_trigger=False
+        self.upload_running=False
         self.send_status=True
+        self.manual_upload=False
         self.email_address=""
+        now = datetime.datetime.now()
+        self.nowhour=now.hour
         
         self.iseg=False
         self.srs=False
@@ -258,7 +261,7 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
         self.debug_stream("In write_Save_Filename()")
         data = attr.get_write_value()
         #----- PROTECTED REGION ID(Sweep_spectra_DLD.Save_Filename_write) ENABLED START -----#
-        self.Save_Filename=data
+        self.Filename=data
         #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.Save_Filename_write
         
     def write_CmdTrig_Save_spectrum(self, attr):
@@ -399,12 +402,19 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
         
         #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.download_link_read
         
-    def write_send_status(self, attr):
-        self.debug_stream("In write_send_status()")
+    def write_send_email(self, attr):
+        self.debug_stream("In write_send_email()")
         data = attr.get_write_value()
-        #----- PROTECTED REGION ID(Sweep_spectra_DLD.send_status_write) ENABLED START -----#
-        self.send_status=data
-        #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.send_status_write
+        #----- PROTECTED REGION ID(Sweep_spectra_DLD.send_email_write) ENABLED START -----#
+        
+        #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.send_email_write
+        
+    def write_manual_upload(self, attr):
+        self.debug_stream("In write_manual_upload()")
+        data = attr.get_write_value()
+        #----- PROTECTED REGION ID(Sweep_spectra_DLD.manual_upload_write) ENABLED START -----#
+        self.manual_upload=True
+        #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.manual_upload_write
         
     def read_sp_y(self, attr):
         self.debug_stream("In read_sp_y()")
@@ -451,6 +461,7 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
             return
         self.upload_running=True
         archived=False
+        print ("archive",self.attr_full_file_path_read)
         if os.path.isfile(self.attr_full_file_path_read):
             while archived==False:
                 process=subprocess.Popen(["zip","-j","-1",self.attr_full_file_path_read+".zip",self.attr_full_file_path_read], stdout=subprocess.PIPE)
@@ -472,6 +483,8 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
                     # Save the credentials for the next run
                 with open('token.pickle', 'wb') as token:
                     pickle.dump(creds, token)
+            while (os.system("ping -c 1 www.googleapis.com"))!=0:
+                time.sleep(1)
             service = build('drive', 'v3', credentials=creds)
                 
                 # Call the Drive v3 API
@@ -481,8 +494,12 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
                 for item in items:
                     if self.Save_Filename+".zip"==item['name']:
                         service.files().delete(fileId=item['id']).execute()
-            media = MediaFileUpload(self.attr_full_file_path_read+".zip", mimetype='application/zip', chunksize=256*1024, resumable=True)
-        
+            if os.path.exists(self.attr_full_file_path_read+".zip"):
+                media = MediaFileUpload(self.attr_full_file_path_read+".zip", mimetype='application/zip', chunksize=256*1024, resumable=True)
+            else:
+                print ("file not found")
+                self.upload_running=False
+                return
             file_metadata = {'name': self.Save_Filename+".zip"}
                         
             file = service.files().create(body=file_metadata,
@@ -493,8 +510,8 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
             while not response:
                 status, response = file.next_chunk()
                 if status:
-                    self.attr_upload_progress_read=int(status.progress() * 100)
-                            
+                    print ("upload progress ", int(status.progress() * 100))
+                    self.attr_upload_progress_read=int(status.progress() * 100)        
             results = service.files().list(pageSize=10, fields="nextPageToken, files(id, name)").execute()
             items = results.get('files', [])
             if items:
@@ -505,6 +522,7 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
             self.attr_upload_progress_read=0
             if self.send_status==True:
                 self.send_email()
+                
             
     def send_email(self):
         time.sleep(1)
@@ -522,26 +540,30 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
             part = MIMEApplication(file.read(),Name=os.path.basename(screenshot_path))
         msg.attach(part)
         msg.attach(MIMEText(TEXT))
+        while (os.system("ping -c 1 www.googleapis.com"))!=0:
+            time.sleep(1)
         try:
             server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
             server.ehlo()
             server.login(gmail_user, gmail_pwd)
             server.sendmail(FROM, TO, msg.as_string())
-            self.ui.label_15.setText("successfully sent the mail at "+str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
             print ('successfully sent the mail')
         except:
-            self.ui.label_15.setText("failed to send mail")
             print ("failed to send mail")
 
             
     def big_brother(self):
         while True:
-            now = datetime.datetime.now()
-            if self.nowhour!=now.hour:
-                self.nowhour=now.hour
-                while self.upload_running==True:
-                    time.sleep(1)
-                self.upload()
+            if self.CmdTrig_measure_Start==True:
+                now = datetime.datetime.now()
+                if self.nowhour!=now.hour or self.manual_upload==True:
+                    self.manual_upload=False
+                    self.nowhour=now.hour
+                    while os.path.isfile(self.attr_full_file_path_read)==False:
+                        time.sleep(1)
+                    while self.upload_running==True:
+                        time.sleep(1)
+                    self.upload()
             time.sleep(1)
             
 
@@ -552,7 +574,7 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
                 self.attr_image_to_show_read=self.stack[self.slice_to_show,:,:] 
                 self.attr_energy_slice_read=self.attr_sp_x_read[self.slice_to_show]    
                 self.show_slice_trg==False
-                print ("new slice")
+                #print ("new slice")
             if self.show_slice_trg==True:
                 self.show_slice_trg=False
             time.sleep(1)
@@ -560,7 +582,7 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
         while True:
             if self.change_scale_trig==True and self.attr_Voltage_step_read!=0.0 and self.attr_Sample_V_min_read<self.attr_Sample_V_max_read:
                 self.attr_sp_x_read=np.arange(start=self.attr_Sample_V_min_read, stop=self.attr_Sample_V_max_read+round(self.attr_Voltage_step_read,3), step=round(self.attr_Voltage_step_read,3), dtype=np.float32)
-                print (self.attr_sp_x_read)                
+                #print (self.attr_sp_x_read)                
                 self.attr_sp_y_read=[0]*len(self.attr_sp_x_read)
                 if self.tdc.state()==PyTango.DevState.ON:
                     self.attr_Check_scale_set_read=True
@@ -651,17 +673,17 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
     def create_file_path(self):
         file_path=""
         now=time.strftime("%Y_%m_%d", time.gmtime())
-        if self.Save_Directory=="" or self.Save_Filename=="":
+        if self.Save_Directory=="" or self.Filename=="":
             self.attr_measurements_error_read="Check file path!"
-            print ("Check file path!")
+            #print ("Check file path!")
             return file_path
         else:
             dir_path=self.Save_Directory+"/"+now
             if not os.path.exists(dir_path):
                 os.makedirs(dir_path)
-            self.Save_Filename+=".tiff"
-            file_path=dir_path+"/"+str(self.Save_Filecounter)+"_"+self.Save_Filename+".tiff"
-            print (file_path)
+            self.Save_Filename=str(self.Save_Filecounter)+"_"+self.Filename+".tiff"
+            file_path=dir_path+"/"+self.Save_Filename
+            #print (file_path)
             return file_path
     def save(self):
         while True:
@@ -704,7 +726,7 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
 ######################                                   Stack script            ######################################
                 elif self.CmdTrig_stack_save==True and self.CmdTrig_measure_Start==False:
                     file_path=dir_path+"/"+str(self.Save_Filecounter)+"_"+self.Save_Filename+".tiff"
-                    print (file_path)                
+                    #print (file_path)                
                     if self.CmdTrig_measure_Start==True:
                         self.attr_Check_stack_NotSaved_read=True
                         self.attr_Check_stack_Saved_read=False
@@ -885,7 +907,10 @@ class Sweep_spectra_DLDClass(PyTango.DeviceClass):
         'email_address':
             [[PyTango.DevString,
             PyTango.SCALAR,
-            PyTango.WRITE]],
+            PyTango.WRITE],
+            {
+                'Memorized':"true"
+            } ],
         'upload_progress':
             [[PyTango.DevLong,
             PyTango.SCALAR,
@@ -894,7 +919,14 @@ class Sweep_spectra_DLDClass(PyTango.DeviceClass):
             [[PyTango.DevString,
             PyTango.SCALAR,
             PyTango.READ]],
-        'send_status':
+        'send_email':
+            [[PyTango.DevBoolean,
+            PyTango.SCALAR,
+            PyTango.WRITE],
+            {
+                'Memorized':"true"
+            } ],
+        'manual_upload':
             [[PyTango.DevBoolean,
             PyTango.SCALAR,
             PyTango.WRITE]],
