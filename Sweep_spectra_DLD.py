@@ -61,12 +61,111 @@ from email.mime.text import MIMEText
 import datetime
 import pickle
 import os.path
-from googleapiclient.http import MediaFileUpload
+import os
+SCOPES = ['https://www.googleapis.com/auth/drive']
+from skimage import img_as_float, img_as_int
+from apiclient.http import MediaFileUpload
 from googleapiclient.discovery import build
-
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
-SCOPES = ['https://www.googleapis.com/auth/drive.metadata.readonly']
+import pickle
+import zipfile
+
+class internet_tools:
+    def __init__(self):
+        self.upload_progress=0.0
+        self.download_link=""
+    def upload_file_to_gdrive(self,filepath,filename):
+        """upload zip file to google drive
+        usage: self.upload_file_to_gdrive(path,filename)
+        path - path to file
+        filename - full file name
+        
+        to check upload progress - check variable self.upload_progress
+        Note: file credentials in mandatory
+        retuen: download link
+        """
+        self.upload_progress=0.0
+        if not os.path.isfile(filepath):
+            print ("path not found")
+            return
+        print ("continue upload")
+        creds = None
+        if os.path.exists('token.pickle'):
+            with open('token.pickle', 'rb') as token:
+                creds = pickle.load(token)
+                # If there are no (valid) credentials available, let the user log in.
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+                creds = flow.run_local_server(port=0)
+                # Save the credentials for the next run
+            with open('token.pickle', 'wb') as token:
+                pickle.dump(creds, token)
+        service = build('drive', 'v3', credentials=creds)
+
+                # Call the Drive v3 API
+        results = service.files().list(pageSize=10, fields="nextPageToken, files(id, name)").execute()
+        items = results.get('files', [])
+        if items:
+            for item in items:
+                 if filename==item['name']:
+                    service.files().delete(fileId=item['id']).execute()
+        media = MediaFileUpload(filepath, mimetype='image/tiff', chunksize=256*1024, resumable=True)
+
+        file_metadata = {'name': filename}
+
+        file = service.files().create(body=file_metadata,
+                                    media_body=media,
+                                    fields='id')
+
+        response = None
+        while not response:
+            status, response = file.next_chunk()
+            if status:
+                self.upload_progress=int(status.progress() * 100)
+                #print (f"upload progres={self.upload_progress}%")
+        results = service.files().list(pageSize=10, fields="nextPageToken, files(id, name)").execute()
+        items = results.get('files', [])
+        if items:
+            for item in items:
+                if filename==item['name']:
+                    self.download_link="https://drive.google.com/file/d/" + item['id']+'/view'
+        return self.download_link
+
+    def send_email(self, filelink, email_address, make_screenshot=True):
+        time.sleep(1)
+        msg = MIMEMultipart()
+        gmail_user = "pressure.uni.mainz@gmail.com"
+        gmail_pwd = "pressureunimainz"
+        FROM = "pressure.uni.mainz@gmail.com"
+        TO = email_address     
+        SUBJECT = "Microscope status"+str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        TEXT = ""
+        TEXT+=("Link to downdload lat measured file "+ filelink)+"\n"
+        if make_screenshot:
+            screenshot_path="screenshot.png"
+            subprocess.run(["scrot", screenshot_path])
+            with open(screenshot_path, "rb") as file:
+                part = MIMEApplication(file.read(),Name=os.path.basename(screenshot_path))
+            msg.attach(part)
+        msg.attach(MIMEText(TEXT))
+        attempts=0
+        while (os.system("ping -c 1 www.googleapis.com"))!=0:
+            attempts+=1
+            if attempts==10:
+                return
+            time.sleep(1)
+        try:
+            server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+            server.ehlo()
+            server.login(gmail_user, gmail_pwd)
+            server.sendmail(FROM, TO, msg.as_string())
+            print ('successfully sent the mail')
+        except:
+            print ("failed to send mail")
 #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.additionnal_import
 
 # Device States Description
@@ -152,10 +251,6 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
             self.spectrum_thread = threading.Thread(target=self.measure)
             self.spectrum_thread.setDaemon(True)
             self.spectrum_thread.start()
-        if not 'save_thread' in dir(self):
-            self.save_thread = threading.Thread(target=self.save)
-            self.save_thread.setDaemon(True)
-            self.save_thread.start()
         if not 'show_thread' in dir(self):
             self.show_thread = threading.Thread(target=self.show)
             self.show_thread.setDaemon(True)
@@ -455,103 +550,6 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
     
 
     #----- PROTECTED REGION ID(Sweep_spectra_DLD.programmer_methods) ENABLED START -----#
-    def upload(self):
-        """send file(s) to google cloud"""
-        if self.upload_running==True:
-            return
-        self.upload_running=True
-        archived=False
-        print ("archive",self.attr_full_file_path_read)
-        if os.path.isfile(self.attr_full_file_path_read):
-            while archived==False:
-                process=subprocess.Popen(["zip","-j","-1",self.attr_full_file_path_read+".zip",self.attr_full_file_path_read], stdout=subprocess.PIPE)
-                stdout = process.communicate()[0]
-                stdout='STDOUT:{}'.format(stdout)
-                if "warning" not in stdout:
-                    archived=True
-            creds = None
-            if os.path.exists('token.pickle'):
-                with open('token.pickle', 'rb') as token:
-                    creds = pickle.load(token)
-                    # If there are no (valid) credentials available, let the user log in.
-            if not creds or not creds.valid:
-                if creds and creds.expired and creds.refresh_token:
-                    creds.refresh(Request())
-                else:
-                    flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-                    creds = flow.run_local_server(port=0)
-                    # Save the credentials for the next run
-                with open('token.pickle', 'wb') as token:
-                    pickle.dump(creds, token)
-            while (os.system("ping -c 1 www.googleapis.com"))!=0:
-                time.sleep(1)
-            service = build('drive', 'v3', credentials=creds)
-                
-                # Call the Drive v3 API
-            results = service.files().list(pageSize=10, fields="nextPageToken, files(id, name)").execute()
-            items = results.get('files', [])
-            if items:
-                for item in items:
-                    if self.Save_Filename+".zip"==item['name']:
-                        service.files().delete(fileId=item['id']).execute()
-            if os.path.exists(self.attr_full_file_path_read+".zip"):
-                media = MediaFileUpload(self.attr_full_file_path_read+".zip", mimetype='application/zip', chunksize=256*1024, resumable=True)
-            else:
-                print ("file not found")
-                self.upload_running=False
-                return
-            file_metadata = {'name': self.Save_Filename+".zip"}
-                        
-            file = service.files().create(body=file_metadata,
-                                                    media_body=media,
-                                                    fields='id')
-    
-            response = None
-            while not response:
-                status, response = file.next_chunk()
-                if status:
-                    print ("upload progress ", int(status.progress() * 100))
-                    self.attr_upload_progress_read=int(status.progress() * 100)        
-            results = service.files().list(pageSize=10, fields="nextPageToken, files(id, name)").execute()
-            items = results.get('files', [])
-            if items:
-                for item in items:
-                    if self.Save_Filename+".zip"==item['name']:
-                        self.attr_download_link_read="https://drive.google.com/file/d/" + item['id']+'/view'
-            self.upload_running=False
-            self.attr_upload_progress_read=0
-            if self.send_status==True:
-                self.send_email()
-                
-            
-    def send_email(self):
-        time.sleep(1)
-        msg = MIMEMultipart()
-        gmail_user = "pressure.uni.mainz@gmail.com"
-        gmail_pwd = "pressureunimainz"
-        FROM = "pressure.uni.mainz@gmail.com"
-        TO = self.email_address     
-        SUBJECT = "Microscope status"+str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        TEXT = ""
-        TEXT+=("Link to downdload lat measured file "+ self.attr_download_link_read)+"\n"
-        screenshot_path="screenshot.png"
-        subprocess.run(["scrot", screenshot_path])
-        with open(screenshot_path, "rb") as file:
-            part = MIMEApplication(file.read(),Name=os.path.basename(screenshot_path))
-        msg.attach(part)
-        msg.attach(MIMEText(TEXT))
-        while (os.system("ping -c 1 www.googleapis.com"))!=0:
-            time.sleep(1)
-        try:
-            server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
-            server.ehlo()
-            server.login(gmail_user, gmail_pwd)
-            server.sendmail(FROM, TO, msg.as_string())
-            print ('successfully sent the mail')
-        except:
-            print ("failed to send mail")
-
-            
     def big_brother(self):
         while True:
             if self.CmdTrig_measure_Start==True:
@@ -578,10 +576,14 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
             if self.show_slice_trg==True:
                 self.show_slice_trg=False
             time.sleep(1)
+
     def change_scale(self):
         while True:
             if self.change_scale_trig==True and self.attr_Voltage_step_read!=0.0 and self.attr_Sample_V_min_read<self.attr_Sample_V_max_read:
-                self.attr_sp_x_read=np.arange(start=self.attr_Sample_V_min_read, stop=self.attr_Sample_V_max_read+round(self.attr_Voltage_step_read,3), step=round(self.attr_Voltage_step_read,3), dtype=np.float32)
+                self.attr_sp_x_read=np.arange(start=self.attr_Sample_V_min_read, 
+						stop=self.attr_Sample_V_max_read+round(self.attr_Voltage_step_read,3), 
+						step=round(self.attr_Voltage_step_read,3), 
+						dtype=np.float32)
                 #print (self.attr_sp_x_read)                
                 self.attr_sp_y_read=[0]*len(self.attr_sp_x_read)
                 if self.tdc.state()==PyTango.DevState.ON:
@@ -592,84 +594,97 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
                     self.attr_measurements_error_read="Check TDC"
                 self.change_scale_trig=False
             time.sleep(1)
+
     def measure(self):
         while True:
             i=len(self.attr_sp_x_read)-1#0                
             if self.CmdTrig_measure_Start==True:
-                self.file_counter=PyTango.DeviceProxy("sweep/spectra/ktof")
-                self.file_counter.write_attribute("Save_Filecounter",self.Save_Filecounter+1)
+                self.sweep_spectra=PyTango.DeviceProxy("sweep/spectra/ktof")
+                self.sweep_spectra.write_attribute("Save_Filecounter",self.Save_Filecounter+1)
                 self.attr_full_file_path_read=self.create_file_path()
             if self.attr_full_file_path_read=="":
                 self.CmdTrig_measure_Start=False
             elif self.CmdTrig_measure_Start==True:                 
-                with tifffile.TiffWriter(self.attr_full_file_path_read) as tif:
-                    while self.CmdTrig_measure_Start==True:                
-                        self.attr_Check_stack_Saved_read=False
-                        self.attr_Check_spectrum_Saved_read=False
-                        self.attr_Check_stack_NotSaved_read=False
-                        self.attr_Check_spectrum_NotSaved_read=False
-                        self.attr_Server_Save_File_Busy_read=False
-                        self.Check_File_Saved=2
-                        if self.attr_Check_scale_set_read==False:
-                            self.attr_measurements_error_read="Check scale"
-                            self.CmdTrig_measure_Start=False
-                            break                    
-                        if self.sample.state()!=PyTango.DevState.ON:
-                            self.attr_measurements_error_read="Check ISEG"
-                            self.CmdTrig_measure_Start=False
-                            break
-                        if self.sample.read_attribute("Sample_VSetOn").value!=True:
-                            self.attr_measurements_error_read="Check Sample potential"
-                            self.CmdTrig_measure_Start=False                    
-                            break
-                        if self.tdc.state()!=PyTango.DevState.ON:
-                            self.attr_measurements_error_read="Check TDC server"                    
-                            self.CmdTrig_measure_Start=False
-                            break
-                        self.attr_measurements_error_read="Start measurements" 
-                        self.attr_Progress_read=100-round(100*i/(len(self.attr_sp_x_read)-1),3)#round(100*i/len(self.attr_sp_x_read),3)
-                        self.tdc.write_attribute("ExposureAccu", self.attr_Exposure_read)
-                        self.sample.write_attribute("Sample_VUSet",round(self.attr_sp_x_read[i],3)) 
-                        #self.sample.write_attribute("voltage_w",round(self.attr_sp_x_read[i],2))
+                while self.CmdTrig_measure_Start==True:                
+                    self.attr_Check_stack_Saved_read=False
+                    self.attr_Check_spectrum_Saved_read=False
+                    self.attr_Check_stack_NotSaved_read=False
+                    self.attr_Check_spectrum_NotSaved_read=False
+                    self.attr_Server_Save_File_Busy_read=False
+                    self.Check_File_Saved=2
+                    if self.attr_Check_scale_set_read==False:
+                        self.attr_measurements_error_read="Check scale"
+                        self.CmdTrig_measure_Start=False
+                        break                    
+                    if self.sample.state()!=PyTango.DevState.ON:
+                        self.attr_measurements_error_read="Check ISEG"
+                        self.CmdTrig_measure_Start=False
+                        break
+                    if self.sample.read_attribute("Sample_VSetOn").value!=True:
+                        self.attr_measurements_error_read="Check Sample potential"
+                        self.CmdTrig_measure_Start=False                    
+                        break
+                    if self.tdc.state()!=PyTango.DevState.ON:
+                        self.attr_measurements_error_read="Check TDC server"                    
+                        self.CmdTrig_measure_Start=False
+                        break
+                    self.attr_measurements_error_read="Start measurements" 
+                    self.attr_Progress_read=100-round(100*i/(len(self.attr_sp_x_read)-1),3)#round(100*i/len(self.attr_sp_x_read),3)
+                    self.tdc.write_attribute("ExposureAccu", self.attr_Exposure_read)
+                    self.sample.write_attribute("Sample_VUSet",round(self.attr_sp_x_read[i],3)) 
+                    #self.sample.write_attribute("voltage_w",round(self.attr_sp_x_read[i],2))
+                    dx=0.05
+                    if self.srs==True:                        
+                        dx=0.001
+                    if self.iseg==True:
                         dx=0.05
-                        if self.srs==True:                        
-                            dx=0.001
-                        if self.iseg==True:
-                            dx=0.05
-                        while self.sample.read_attribute("Sample_VURead").value<self.attr_sp_x_read[i]-dx or self.sample.read_attribute("Sample_VURead").value>self.attr_sp_x_read[i]+dx:
-                            #print "Delay!"
-                            time.sleep(0.1)
-                        self.tdc.write_attribute("CmdTrig_Accumulation_Start",1)
-                        k=0.0
-                        while self.tdc.read_attribute("Accumulation_Running").value==True:
-                            #print "Delay! Accumulation is running!"
-                            time.sleep(0.2)
-                            k+=0.2
-                            if k>3*self.attr_Exposure_read:
-                                self.stop_measurements=True
-                                break
-                        if self.stop_measurements==True:
-                            self.attr_measurements_error_read="Check TDC server"                    
-                            self.CmdTrig_measure_Start=False
+                    while self.sample.read_attribute("Sample_VURead").value<self.attr_sp_x_read[i]-dx or self.sample.read_attribute("Sample_VURead").value>self.attr_sp_x_read[i]+dx:
+                        #print "Delay!"
+                        time.sleep(0.1)
+                    self.tdc.write_attribute("CmdTrig_Accumulation_Start",1)
+                    k=0.0
+                    while self.tdc.read_attribute("Accumulation_Running").value==True:
+                        #print "Delay! Accumulation is running!"
+                        time.sleep(0.2)
+                        k+=0.2
+                        if k>3*self.attr_Exposure_read:
+                            self.stop_measurements=True
                             break
-                        time.sleep(1)
+                    if self.stop_measurements==True:
+                        self.attr_measurements_error_read="Check TDC server"                    
+                        self.CmdTrig_measure_Start=False
+                        break
+                    time.sleep(1)
                         
-                        self.attr_sp_y_read[i]=np.sum(self.tdc.read_attribute("Hist_Accu_T").value)
-                        #print type(self.tdc.read_attribute("Hist_Accu_XY").value[0][0])
-                        #self.stack[i,:,:]=np.array(self.tdc.read_attribute("Hist_Accu_XY").value,dtype=np.int)
-                        #print self.tdc.read_attribute("Hist_Accu_T").value
-                        #data = np.random.randint(0, 2**12, (701, 701), 'uint32')
-                        #tif.save(data, compress=6, photometric='minisblack')
-                        tif.save(np.array(self.tdc.read_attribute("Hist_Accu_XY").value,dtype=np.uint32), compress=6, photometric='minisblack')
-                        i-=1
-                        if i<0:#==len(self.attr_sp_x_read):
-                            self.CmdTrig_measure_Start=False
-                            self.attr_Progress_read=100#-round(100*i/(len(self.attr_sp_x_read)-1),3)#round(100*i/len(self.attr_sp_x_read),3)
-                            i=len(self.attr_sp_x_read)-1#0
-                        elif self.CmdTrig_measure_Start==False:
-                            self.tdc.write_attribute("CmdTrig_Accumulation_Stop",1)
-                            i=len(self.attr_sp_x_read)-1#0
+                    self.attr_sp_y_read[i]=np.sum(self.tdc.read_attribute("Hist_Accu_T").value)
+                    if os.path.isfile(self.attr_full_file_path_read):
+                        image = img_as_float(tifffile.imread(self.attr_full_file_path_read))
+                        image=np.append(image, np.array(self.tdc.read_attribute("Hist_Accu_XY").value, dtype=np.float32)[np.newaxis , : , : ], axis=0)
+                        tifffile.imwrite(self.attr_full_file_path_read, image, compress=6, photometric='minisblack')
+                    else:
+                        tifffile.imwrite(self.attr_full_file_path_read, np.array(self.tdc.read_attribute("Hist_Accu_XY").value, dtype=np.float32)[np.newaxis , : , : ], compress=6, photometric='minisblack')
+                    now = datetime.datetime.now()
+                    try:
+                        if self.nowhour!=now.hour:
+                            self.nowhour=now.hour
+                            #a = zipfile.ZipFile(self.attr_full_file_path_read+'.zip', 'w', zipfile.ZIP_DEFLATED)
+                            #a.write(self.attr_full_file_path_read)#self.Save_Directory_full,self.Save_Filename)
+                            #a.close
+                            it=internet_tools()
+                            link=it.upload_file_to_gdrive(self.attr_full_file_path_read,self.Save_Filename)
+                            it.send_email(link,"pressure.uni.mainz@gmail.com", True)
+                    except:
+                        pass
+                    i-=1
+                    if i<0:
+                        self.CmdTrig_measure_Start=False
+                        self.attr_Progress_read=100#-round(100*i/(len(self.attr_sp_x_read)-1),3)#round(100*i/len(self.attr_sp_x_read),3)
+                        i=len(self.attr_sp_x_read)-1#0
+                    elif self.CmdTrig_measure_Start==False:
+                        self.tdc.write_attribute("CmdTrig_Accumulation_Stop",1)
+                        i=len(self.attr_sp_x_read)-1#0
             time.sleep(1)
+
     def create_file_path(self):
         file_path=""
         now=time.strftime("%Y_%m_%d", time.gmtime())
@@ -678,84 +693,18 @@ class Sweep_spectra_DLD (PyTango.Device_4Impl):
             #print ("Check file path!")
             return file_path
         else:
+            self.sweep_spectra=PyTango.DeviceProxy("sweep/spectra/ktof")
+            self.Filename = self.Filename.replace('?', '_').replace('/','_').replace('(','_').replace(')','_').replace(':','_').replace(';','_')
+            self.sweep_spectra.write_attribute("Save_Filename", self.Filename)
             dir_path=self.Save_Directory+"/"+now
+            self.Save_Directory_full=dir_path
             if not os.path.exists(dir_path):
                 os.makedirs(dir_path)
             self.Save_Filename=str(self.Save_Filecounter)+"_"+self.Filename+".tiff"
             file_path=dir_path+"/"+self.Save_Filename
             #print (file_path)
             return file_path
-    def save(self):
-        while True:
-            now=time.strftime("%Y_%m_%d", time.gmtime())
-            if self.Save_Directory=="" or self.Save_Filename=="":
-                self.attr_measurements_error_read="Check file path!"
-            else:
-                dir_path=self.Save_Directory+"/"+now
-                if not os.path.exists(dir_path):
-                    os.makedirs(dir_path)
-######################                                   Spectrum script            ######################################
-                if self.CmdTrig_spectrum_save==True and self.CmdTrig_measure_Start==False:
-                    file_path=dir_path+"/"+str(self.Save_Filecounter)+"_"+self.Save_Filename+".txt"
-                    print (file_path)
-                    if self.CmdTrig_measure_Start==True:
-                        self.attr_measurements_error_read="Measurements in progress!"
-                        self.attr_Check_spectrum_NotSaved_read=True
-                        self.attr_Check_spectrum_Saved_read=False
-                    elif os.path.isfile(file_path)==True:
-                        self.attr_measurements_error_read="File already exists!"
-                        self.attr_Check_spectrum_NotSaved_read=True
-                        self.attr_Check_spectrum_Saved_read=False
-                    elif os.path.isfile(file_path)==False and self.CmdTrig_measure_Start==False:
-                        self.attr_Server_Save_File_Busy_read=True
-                        np.savetxt(file_path, np.c_[self.attr_sp_x_read, self.attr_sp_y_read])
-                        self.file_counter=PyTango.DeviceProxy("sweep/spectra/ktof")
-                        self.file_counter.write_attribute("Save_Filecounter",self.Save_Filecounter+1)
-                        if os.path.isfile(file_path)==True:
-                            self.attr_Server_Save_File_Busy_read=False
-                            self.attr_Check_spectrum_Saved_read=True
-                            self.attr_Check_spectrum_NotSaved_read=False
-                            self.attr_measurements_error_read="spectrum saved"
-                            self.attr_Progress_read=0
-                    else:
-                        self.attr_Check_spectrum_NotSaved_read=True
-                        self.attr_Check_spectrum_Saved_read=False
-                    
-
-                    self.CmdTrig_spectrum_save=False
-######################                                   Stack script            ######################################
-                elif self.CmdTrig_stack_save==True and self.CmdTrig_measure_Start==False:
-                    file_path=dir_path+"/"+str(self.Save_Filecounter)+"_"+self.Save_Filename+".tiff"
-                    #print (file_path)                
-                    if self.CmdTrig_measure_Start==True:
-                        self.attr_Check_stack_NotSaved_read=True
-                        self.attr_Check_stack_Saved_read=False
-                        self.attr_measurements_error_read="Measurements in progress!"
-                    elif os.path.isfile(file_path)==True:
-                        self.attr_Check_stack_NotSaved_read=True
-                        self.attr_Check_stack_Saved_read=False
-                        self.attr_measurements_error_read="File already exists!"
-                    elif os.path.isfile(file_path)==False and self.CmdTrig_measure_Start==False:
-                        self.attr_Server_Save_File_Busy_read=True
-                        imlist = []
-                        for m in self.stack:
-                            imlist.append(Image.fromarray(m.astype('uint32')))
-                        imlist[0].save(file_path, compression="tiff_deflate", save_all=True, append_images=imlist[1:])
-                        print ("saved")
-                        if os.path.isfile(file_path)==True:
-                            self.attr_Server_Save_File_Busy_read=False
-                            self.attr_Check_stack_Saved_read=True
-                            self.CmdTrig_stack_save=False
-                            self.attr_measurements_error_read="stack saved"
-                            self.attr_Progress_read=0
-                        self.file_counter=PyTango.DeviceProxy("sweep/spectra/ktof")
-                        self.file_counter.write_attribute("Save_Filecounter",self.Save_Filecounter+1)
-                    else:
-                        self.attr_Check_stack_Saved_read=False
-                        self.attr_Check_stack_NotSaved_read=True
-                    self.CmdTrig_stack_save=False
-            time.sleep(1)
-                
+    
     #----- PROTECTED REGION END -----#	//	Sweep_spectra_DLD.programmer_methods
 
 class Sweep_spectra_DLDClass(PyTango.DeviceClass):
